@@ -50,7 +50,7 @@ load_dotenv()
 
 VERSION = "v0.2"
 
-DEBUG_MODE = True
+DEBUG_MODE = os.getenv("DEBUG_MODE", "True").lower() == "true"
 NUM_PARTICIPANTS_IN_DEBUG_MODE = 5
 
 OUTPUT_DIRECTORY = f"data/processed/{VERSION}"
