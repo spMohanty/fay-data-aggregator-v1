@@ -49,10 +49,20 @@ warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 load_dotenv()
 
 VERSION = "v0.2"
+
+DEBUG_MODE = True
+NUM_PARTICIPANTS_IN_DEBUG_MODE = 5
+
 OUTPUT_DIRECTORY = f"data/processed/{VERSION}"
 RESAMPLE_INTERVAL = "15min" # resample CGM data at 15-minute intervals
 GLUCOSE_TIMESERIES_GAP_SPLIT_THRESHOLD = pd.Timedelta(hours=2) # break up all timeseries with gaps > 2 hours (else impute)
 FOOD_ALIGNMENT_TIME_WINDOW = pd.Timedelta(hours=0.5)  # Max offset for linking MFR to CGM - at most +/- 30 minutes
+
+if DEBUG_MODE:
+    OUTPUT_DIRECTORY = os.path.join(OUTPUT_DIRECTORY, "debug")
+    FILENAME_PREFIX = "debug-"
+else:
+    FILENAME_PREFIX = ""
 
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
@@ -81,11 +91,15 @@ completed_participants = db.AnalyticsDb().select("""
     FROM faydesc_participants
     WHERE phase = '4_study_end'
 """)
+participant_ids = set(completed_participants["id"])
+
+if DEBUG_MODE:
+    # In case of debug mode, only process the first 5 participants
+    participant_ids = sorted(list(participant_ids)[:NUM_PARTICIPANTS_IN_DEBUG_MODE])
 
 # B) Get MFR data for these participants
 log.info("Querying MFR (food) data for completed participants...")
 all_mfr_data = ds.Data.get_dishes()  # Replace with your actual function or query
-participant_ids = set(completed_participants["id"])
 mfr_mask = all_mfr_data["fay_user_id"].isin(participant_ids)
 filtered_mfr_data = all_mfr_data[mfr_mask].copy()
 
@@ -99,8 +113,12 @@ raw_glucose_df = db.AnalyticsDb().select(
     i=glucose_query.identifiers
 )
 
+if DEBUG_MODE:
+    # Only use a subset of the participants in debug mode
+    raw_glucose_df = raw_glucose_df[raw_glucose_df["user_id"].isin(participant_ids)]
+
 # Store raw glucose data before processing
-raw_glucose_path = os.path.join(OUTPUT_DIRECTORY, "glucose_raw.csv")
+raw_glucose_path = os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}glucose_raw.csv")
 raw_glucose_df.to_csv(raw_glucose_path, index=False)
 log.info(f"Raw glucose data saved to: {raw_glucose_path}")
 
@@ -238,7 +256,7 @@ resampled_glucose_df = pd.concat(resampled_glucose_list, ignore_index=True)
 log.info(f"Total duplicate read_at timestamps handled: {total_duplicate_count}")
 
 # (Optional) Save resampled CGM to CSV for reference
-resampled_cgm_path = os.path.join(OUTPUT_DIRECTORY, "glucose_resampled.csv")
+resampled_cgm_path = os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}glucose_resampled.csv")
 resampled_glucose_df.to_csv(resampled_cgm_path, index=False)
 log.info(f"Resampled CGM data saved to: {resampled_cgm_path}")
 
@@ -332,7 +350,7 @@ for dish_id_value, group_df in tqdm(filtered_mfr_data.groupby("dish_id"), desc="
 aggregated_food_df = pd.DataFrame(aggregated_rows)
 
 # (Optional) Save aggregated food data to CSV for reference
-aggregated_food_csv = os.path.join(OUTPUT_DIRECTORY, "food_aggregated.csv")
+aggregated_food_csv = os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}food_aggregated.csv")
 aggregated_food_df.to_csv(aggregated_food_csv, index=False)
 log.info(f"Aggregated MFR data saved to: {aggregated_food_csv}")
 
@@ -590,25 +608,11 @@ if "loc_read_at" in merged_ppgr_df.columns:
 
 output_merged_path = os.path.join(
     OUTPUT_DIRECTORY,
-    f"fay-ppgr-processed-and-aggregated-{VERSION}.csv"
+    f"{FILENAME_PREFIX}fay-ppgr-processed-and-aggregated-{VERSION}.csv"
 )
 merged_ppgr_df.to_csv(output_merged_path, index=False)
 log.info(f"Final merged dataset saved to: {output_merged_path}")
 
-# ---------------------------------------------------------------------------
-# 9. (OPTIONAL) CREATE A SMALL DEV SUBSET
-# ---------------------------------------------------------------------------
-
-unique_users = sorted(merged_ppgr_df["user_id"].unique())
-dev_users = unique_users[:10]  # e.g., pick first 10 user_ids
-
-dev_ppgr_df = merged_ppgr_df[merged_ppgr_df["user_id"].isin(dev_users)]
-dev_output_path = os.path.join(
-    OUTPUT_DIRECTORY,
-    f"fay-ppgr-processed-and-aggregated-{VERSION}-dev.csv"
-)
-dev_ppgr_df.to_csv(dev_output_path, index=False)
-log.info(f"Dev subset (for debugging) saved to: {dev_output_path}")
 
 # ---------------------------------------------------------------------------
 # DONE
