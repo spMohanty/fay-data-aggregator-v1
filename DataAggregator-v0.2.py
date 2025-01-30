@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import tqdm
+from tqdm.rich import tqdm
 
 import numpy as np
 import pandas as pd
@@ -29,9 +30,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 from scipy.stats import ttest_rel as paired_ttest
 
-# Faydesc DB helpers (replace with your actual module paths)
+# Faydesc DB helpers 
 from db_helpers import database as db
 from db_helpers import data_sources as ds
+
+import warnings
+from tqdm import TqdmExperimentalWarning
+
+import logging
+from rich.logging import RichHandler
+
+warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 
 # ---------------------------------------------------------------------------
 # ENVIRONMENT AND GLOBAL CONFIG
@@ -41,19 +50,32 @@ load_dotenv()
 
 VERSION = "v0.2"
 OUTPUT_DIRECTORY = f"data/processed/{VERSION}"
-RESAMPLE_INTERVAL = "15min"
-GLUCOSE_TIMESERIES_GAP_SPLIT_THRESHOLD = pd.Timedelta(hours=2)
-FOOD_ALIGNMENT_TIME_WINDOW = pd.Timedelta(hours=2)  # Max offset for linking MFR to CGM
+RESAMPLE_INTERVAL = "15min" # resample CGM data at 15-minute intervals
+GLUCOSE_TIMESERIES_GAP_SPLIT_THRESHOLD = pd.Timedelta(hours=2) # break up all timeseries with gaps > 2 hours (else impute)
+FOOD_ALIGNMENT_TIME_WINDOW = pd.Timedelta(hours=0.5)  # Max offset for linking MFR to CGM - at most +/- 30 minutes
 
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# LOGGING SETUP
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)]
+)
+
+log = logging.getLogger("rich")
 
 # ---------------------------------------------------------------------------
 # 1. LOAD DATA DIRECTLY FROM DATABASE
 # ---------------------------------------------------------------------------
 
 # A) Get all participants who completed the study
-print("[INFO] Querying completed participants...")
+log.info("Querying completed participants...")
 completed_participants = db.AnalyticsDb().select("""
     SELECT id, cohort
     FROM faydesc_participants
@@ -61,7 +83,7 @@ completed_participants = db.AnalyticsDb().select("""
 """)
 
 # B) Get MFR data for these participants
-print("[INFO] Querying MFR (food) data for completed participants...")
+log.info("Querying MFR (food) data for completed participants...")
 all_mfr_data = ds.Data.get_dishes()  # Replace with your actual function or query
 participant_ids = set(completed_participants["id"])
 mfr_mask = all_mfr_data["fay_user_id"].isin(participant_ids)
@@ -69,13 +91,18 @@ filtered_mfr_data = all_mfr_data[mfr_mask].copy()
 
 # C) Get glucose data
 #    ds.Data.get_glucose_query() might return a Query object with .text, .parameters, and .identifiers
-print("[INFO] Querying glucose data...")
+log.info("Querying glucose data...")
 glucose_query = ds.Data.get_glucose_query()
 raw_glucose_df = db.AnalyticsDb().select(
     q=f"SELECT g.* FROM ({glucose_query.text}) g",
     p=glucose_query.parameters,
     i=glucose_query.identifiers
 )
+
+# Store raw glucose data before processing
+raw_glucose_path = os.path.join(OUTPUT_DIRECTORY, "glucose_raw.csv")
+raw_glucose_df.to_csv(raw_glucose_path, index=False)
+log.info(f"Raw glucose data saved to: {raw_glucose_path}")
 
 # ---------------------------------------------------------------------------
 # 2. RESAMPLE GLUCOSE DATA (15-MIN INTERVAL)
@@ -201,19 +228,19 @@ def resample_cgm_for_user(user_df: pd.DataFrame) -> pd.DataFrame:
     resampled_user_df.reset_index(inplace=True)  # restore 'read_at' as a column
     return resampled_user_df
 
-print("[INFO] Resampling glucose data at 15-minute intervals...")
+log.info("Resampling glucose data at 15-minute intervals...")
 grouped_users = raw_glucose_df.groupby("user_id")
 resampled_glucose_list = []
-for _, user_data in tqdm.tqdm(grouped_users, desc="Resampling CGM user-by-user"):
+for _, user_data in tqdm(grouped_users, desc="Resampling CGM user-by-user"):
     resampled_glucose_list.append(resample_cgm_for_user(user_data))
 
 resampled_glucose_df = pd.concat(resampled_glucose_list, ignore_index=True)
-print(f"[INFO] Total duplicate read_at timestamps handled: {total_duplicate_count}")
+log.info(f"Total duplicate read_at timestamps handled: {total_duplicate_count}")
 
 # (Optional) Save resampled CGM to CSV for reference
 resampled_cgm_path = os.path.join(OUTPUT_DIRECTORY, "glucose_resampled.csv")
 resampled_glucose_df.to_csv(resampled_cgm_path, index=False)
-print(f"[INFO] Resampled CGM data saved to: {resampled_cgm_path}")
+log.info(f"Resampled CGM data saved to: {resampled_cgm_path}")
 
 # ---------------------------------------------------------------------------
 # 3. AGGREGATE MFR DATA BY DISH_ID
@@ -267,11 +294,13 @@ def merge_food_cluster(dish_dataframe: pd.DataFrame) -> dict:
         "eaten_quantity_in_gram", "energy_kcal_eaten", "carb_eaten",
         "fat_eaten", "protein_eaten", "fiber_eaten", "alcohol_eaten"
     ]
-    # Fill NaNs with zeros for safe summations
-    dish_dataframe[sum_cols].fillna(0, inplace=True)
+    # Fill NaNs with zeros for safe summations 
+    ## create a separate copy to avoid pandas warnings
+    nutritional_data = dish_dataframe[sum_cols].copy()
+    nutritional_data.fillna(0, inplace=True)
 
     for col_name in sum_cols:
-        aggregated_row[col_name] = float(dish_dataframe[col_name].sum())
+        aggregated_row[col_name] = float(nutritional_data[col_name].sum())
 
     # One-hot columns for food groups
     all_food_groups = {
@@ -294,9 +323,9 @@ def merge_food_cluster(dish_dataframe: pd.DataFrame) -> dict:
 
     return aggregated_row
 
-print("[INFO] Aggregating MFR data by dish_id...")
+log.info("Aggregating MFR data by dish_id...")
 aggregated_rows = []
-for dish_id_value, group_df in tqdm.tqdm(filtered_mfr_data.groupby("dish_id")):
+for dish_id_value, group_df in tqdm(filtered_mfr_data.groupby("dish_id"), desc="Aggregating MFR data by dish_id"):
     aggregated = merge_food_cluster(group_df)
     aggregated_rows.append(aggregated)
 
@@ -305,7 +334,7 @@ aggregated_food_df = pd.DataFrame(aggregated_rows)
 # (Optional) Save aggregated food data to CSV for reference
 aggregated_food_csv = os.path.join(OUTPUT_DIRECTORY, "food_aggregated.csv")
 aggregated_food_df.to_csv(aggregated_food_csv, index=False)
-print(f"[INFO] Aggregated MFR data saved to: {aggregated_food_csv}")
+log.info(f"Aggregated MFR data saved to: {aggregated_food_csv}")
 
 # ---------------------------------------------------------------------------
 # 4. ALIGN FOOD TO CGM TIMESTAMPS (WITHIN 2-HOUR WINDOW)
@@ -343,7 +372,7 @@ def align_food_to_cgm_timestamps(
     aligned_rows_list = []
 
     # Process user-by-user
-    for user_id_val in tqdm.tqdm(glucose_df["user_id"].unique(), desc="Aligning MFR to CGM"):
+    for user_id_val in tqdm(glucose_df["user_id"].unique(), desc="Aligning MFR to CGM"):
         user_glucose_subset = glucose_df[glucose_df["user_id"] == user_id_val]
         user_food_subset = aggregated_food_data[aggregated_food_data["user_id"] == user_id_val]
 
@@ -362,10 +391,10 @@ def align_food_to_cgm_timestamps(
 
         # Find nearest CGM timestamp for each food intake
         aligned_timestamps = []
-        original_eaten_at_timestamps = []
         for _, food_row in user_food_subset.iterrows():
             food_time = food_row["eaten_at"]
-            original_eaten_at_timestamps.append(food_time)
+            
+            # todo: explore the minima based alignment in a future version
             # Index of row in user_glucose_subset with minimal time difference
             closest_idx = (user_glucose_subset["read_at"] - food_time).abs().idxmin()
             closest_cgm_time = user_glucose_subset.loc[closest_idx, "read_at"]
@@ -377,7 +406,11 @@ def align_food_to_cgm_timestamps(
                 aligned_timestamps.append(pd.NaT)
 
         user_food_subset["aligned_eaten_at"] = aligned_timestamps
-        user_food_subset["original_eaten_at"] = original_eaten_at_timestamps
+        # rename the eaten_at column to original_eaten_at
+        user_food_subset.rename(
+            columns={"eaten_at":  "original_eaten_at"},
+            inplace=True
+        )
         user_food_subset.dropna(subset=["aligned_eaten_at"], inplace=True)
 
         aligned_rows_list.append(user_food_subset)
@@ -385,7 +418,7 @@ def align_food_to_cgm_timestamps(
     aligned_food_df = pd.concat(aligned_rows_list, ignore_index=True) if aligned_rows_list else pd.DataFrame()
     return aligned_food_df
 
-print("[INFO] Aligning aggregated MFR data to CGM timestamps (within 2h)...")
+log.info("Aligning aggregated MFR data to CGM timestamps (within 2h)...")
 aligned_food_df = align_food_to_cgm_timestamps(
     resampled_glucose_df,
     aggregated_food_df,
@@ -427,7 +460,7 @@ def merge_food_clusters_same_cgm_timestamp(group: pd.DataFrame) -> pd.DataFrame:
     merged_entry["food_intake_row"] = 1
 
     # We can take the mean (or earliest) for numeric time columns
-    columns_for_mean = ["eaten_at", "loc_eaten_hour"]
+    columns_for_mean = ["original_eaten_at", "loc_eaten_hour"]
     for col_name in columns_for_mean:
         merged_entry[col_name] = group[col_name].mean()
 
@@ -462,10 +495,10 @@ def merge_food_clusters_same_cgm_timestamp(group: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame([merged_entry])
 
-print("[INFO] Merging multiple dish_ids aligned to the same CGM time...")
+log.info("Merging multiple dish_ids aligned to the same CGM time...")
 merged_food_clusters = []
 grouped_by_timestamp = aligned_food_df.groupby(["aligned_eaten_at", "user_id"])
-for _, group_df in tqdm.tqdm(grouped_by_timestamp, desc="Merging dish clusters"):
+for _, group_df in tqdm(grouped_by_timestamp, desc="Merging dish clusters"):
     merged_subset = merge_food_clusters_same_cgm_timestamp(group_df)
     merged_food_clusters.append(merged_subset)
 
@@ -475,7 +508,7 @@ final_aligned_food_df = pd.concat(merged_food_clusters, ignore_index=True)
 # 6. COMBINE (LEFT-JOIN) RESAMPLED CGM WITH ALIGNED FOOD
 # ---------------------------------------------------------------------------
 
-print("[INFO] Final merge: CGM + aligned MFR data...")
+log.info("Final merge: CGM + aligned MFR data...")
 
 merged_ppgr_df = resampled_glucose_df.merge(
     final_aligned_food_df,
@@ -560,7 +593,7 @@ output_merged_path = os.path.join(
     f"fay-ppgr-processed-and-aggregated-{VERSION}.csv"
 )
 merged_ppgr_df.to_csv(output_merged_path, index=False)
-print(f"[INFO] Final merged dataset saved to: {output_merged_path}")
+log.info(f"Final merged dataset saved to: {output_merged_path}")
 
 # ---------------------------------------------------------------------------
 # 9. (OPTIONAL) CREATE A SMALL DEV SUBSET
@@ -575,10 +608,10 @@ dev_output_path = os.path.join(
     f"fay-ppgr-processed-and-aggregated-{VERSION}-dev.csv"
 )
 dev_ppgr_df.to_csv(dev_output_path, index=False)
-print(f"[INFO] Dev subset (for debugging) saved to: {dev_output_path}")
+log.info(f"Dev subset (for debugging) saved to: {dev_output_path}")
 
 # ---------------------------------------------------------------------------
 # DONE
 # ---------------------------------------------------------------------------
 
-print("[INFO] Data processing pipeline completed successfully.")
+log.info("Data processing pipeline completed successfully.")
