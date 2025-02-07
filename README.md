@@ -36,6 +36,8 @@ This pipeline performs the following key operations:
 1. Create a `.env` file in the root directory with the required database credentials and API keys (see `.env.example`)
 2. Install dependencies:
 ```bash
+
+conda install conda-forge::r-base # install R (for the IGLU metrics)
 pip install -r requirements.txt
 ```
 
@@ -45,7 +47,8 @@ Ensure that your db_helpers has all the necessary files as in the structure belo
 ```
 .
 ├── cache
-│   └── mfr_data.csv
+│   └── mfr_data_v0.csv
+│   └── mfr_data_v1.csv
 ├── database.py
 ├── data_sources.py
 ├── db

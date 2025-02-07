@@ -177,3 +177,5 @@ cython_debug/
 db_helpers/cache/mfr_data.csv
 db_helpers/cache/
 data/
+
+debug.ipynb
