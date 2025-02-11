@@ -41,14 +41,14 @@ import logging
 from rich.logging import RichHandler
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
-
+pd.set_option('future.no_silent_downcasting', True)
 # ---------------------------------------------------------------------------
 # ENVIRONMENT AND GLOBAL CONFIG
 # ---------------------------------------------------------------------------
 
 load_dotenv()
 
-VERSION = "v0.3"
+VERSION = "v0.4"
 
 DEBUG_MODE = os.getenv("DEBUG_MODE", "True").lower() == "true"
 NUM_PARTICIPANTS_IN_DEBUG_MODE = 5
@@ -556,7 +556,7 @@ assert len(merged_ppgr_df) == len(resampled_glucose_df), (
 )
 
 # ---------------------------------------------------------------------------
-# 7. CLEANUP / FILL NA / RE-DERIVE LOCAL TIME FEATURES
+# 7. Post Process Food Data: CLEANUP / FILL NA / RE-DERIVE LOCAL TIME FEATURES
 # ---------------------------------------------------------------------------
 
 # Remove any leftover "Unnamed:..." columns from merges
@@ -628,8 +628,72 @@ if "loc_read_at" in merged_ppgr_df.columns:
 
     merged_ppgr_df["loc_eaten_season"] = merged_ppgr_df["loc_read_at"].dt.month.apply(get_season)
 
-# Add a unique identifier for each row
+# Add a unique identifier for each row, as the number of rows are not going to change from now on
 merged_ppgr_df["ppgr_row_id"] = merged_ppgr_df.index
+
+# ---------------------------------------------------------------------------
+# 7. ADD SLEEP DATA
+# ---------------------------------------------------------------------------
+
+log.info("Adding sleep data to the dataset...")
+# Collect Sleep Data from DB
+raw_sleep_df = ds.Data.get_sleep()
+
+def add_sleep_data(merged_ppgr_df: pd.DataFrame, raw_sleep_df: pd.DataFrame) -> pd.DataFrame:
+    # Convert columns to datetime    
+    raw_sleep_df['started_at'] = pd.to_datetime(raw_sleep_df['started_at'])
+    raw_sleep_df['ended_at']   = pd.to_datetime(raw_sleep_df['ended_at'])
+
+    # Filter out rows where started_at or ended_at is NaT (or NaN)
+    raw_sleep_df = raw_sleep_df.dropna(subset=['started_at', 'ended_at'])
+
+    # Only focus on users with sleep data
+    users_with_sleep = raw_sleep_df['user_id'].unique()
+    ppgr_subset = merged_ppgr_df[merged_ppgr_df['user_id'].isin(users_with_sleep)].copy()
+
+    # Initialize the 'is_sleeping' column as boolean False
+    merged_ppgr_df["is_sleeping"] = pd.Series(False, index=merged_ppgr_df.index, dtype=bool) 
+    ppgr_subset['is_sleeping'] = pd.Series(False, index=ppgr_subset.index, dtype=bool) 
+
+    # Process each user separately
+    for user_id, user_ppgr in tqdm(ppgr_subset.groupby('user_id'), desc="Adding per-user sleep data"):
+        # Get and sort sleep intervals for this user.
+        user_sleep = raw_sleep_df[raw_sleep_df['user_id'] == user_id].sort_values('started_at')
+        
+        # Sort the PPGR rows for this user by read_at.
+        user_ppgr_sorted = user_ppgr.sort_values('read_at')
+        
+        # Use merge_asof: for each PPGR row, find the most recent sleep interval
+        # whose started_at is not after the read_at.
+        merged = pd.merge_asof(
+            user_ppgr_sorted,
+            user_sleep[['started_at', 'ended_at']].sort_values('started_at'),
+            left_on='read_at',
+            right_on='started_at',
+            direction='backward'
+        )
+        
+        # Compute is_sleeping: mark as sleeping if read_at falls before ended_at.
+        is_sleeping = (merged['read_at'] <= merged['ended_at']).fillna(False).astype(bool)
+        # Use .to_numpy() to ensure we are assigning a proper numpy boolean array
+        ppgr_subset.loc[user_ppgr_sorted.index, 'is_sleeping'] = is_sleeping.to_numpy()        
+
+        log.debug(f"User ID: {user_id}, Percentage Sleeping: {is_sleeping.sum() * 100 / len(is_sleeping):0.2f} %")
+        
+    # For merging back into merged_ppgr_df, infer objects and cast to bool as well.
+    merged_ppgr_df.loc[ppgr_subset.index, 'is_sleeping'] = ppgr_subset['is_sleeping'].fillna(False).astype(bool)
+
+    return merged_ppgr_df
+
+
+# Add a default column for is_sleeping
+merged_ppgr_df = add_sleep_data(merged_ppgr_df, raw_sleep_df)
+
+percentage_sleeping = merged_ppgr_df["is_sleeping"].sum() * 100 / len(merged_ppgr_df)
+log.info(f"Percentage time participants sleeping in the dataset: {percentage_sleeping:0.2f} %")
+
+log.info("Added sleep data to the dataset.")
+
 
 # ---------------------------------------------------------------------------
 # 8. EXPORT FINAL DATASET
