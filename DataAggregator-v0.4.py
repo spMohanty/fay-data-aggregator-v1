@@ -60,6 +60,10 @@ RESAMPLE_INTERVAL = "15min" # resample CGM data at 15-minute intervals
 GLUCOSE_TIMESERIES_GAP_SPLIT_THRESHOLD = pd.Timedelta(hours=0.5) # break up all timeseries with gaps > 1 hours (else impute)
 FOOD_ALIGNMENT_TIME_WINDOW = pd.Timedelta(hours=0.5)  # Max offset for linking MFR to CGM - at most +/- 30 minutes
 
+
+INCLUDE_SLEEP_DATA = False
+INCLUDE_ACTIVITY_DATA = False
+
 if DEBUG_MODE:
     OUTPUT_DIRECTORY = os.path.join(OUTPUT_DIRECTORY, "debug")
     FILENAME_PREFIX = "debug-"
@@ -97,8 +101,9 @@ completed_participants = db.AnalyticsDb().select("""
 participant_ids = set(completed_participants["id"])
 
 if DEBUG_MODE:
-    # In case of debug mode, only process the first 5 participants
-    participant_ids = sorted(list(participant_ids)[:NUM_PARTICIPANTS_IN_DEBUG_MODE])
+    # In case of debug mode, only process the first 5 participants + 2 hand picked participants which have activity data
+    participant_ids = sorted(list(participant_ids)[:NUM_PARTICIPANTS_IN_DEBUG_MODE]) + [2680, 5] 
+    log.info(f"Debug mode: processing participants {participant_ids}")
 
 # B) Get MFR data for these participants
 log.info("Querying MFR (food) data for completed participants...")
@@ -458,6 +463,7 @@ aligned_food_df = align_food_to_cgm_timestamps(
     max_offset=FOOD_ALIGNMENT_TIME_WINDOW
 )
 
+
 # ---------------------------------------------------------------------------
 # 5. MERGE FOOD CLUSTERS THAT ALIGN TO THE SAME CGM TIMESTAMP
 # ---------------------------------------------------------------------------
@@ -632,68 +638,175 @@ if "loc_read_at" in merged_ppgr_df.columns:
 merged_ppgr_df["ppgr_row_id"] = merged_ppgr_df.index
 
 # ---------------------------------------------------------------------------
-# 7. ADD SLEEP DATA
+# 8. ADD SLEEP DATA
 # ---------------------------------------------------------------------------
 
-log.info("Adding sleep data to the dataset...")
-# Collect Sleep Data from DB
-raw_sleep_df = ds.Data.get_sleep()
-
-def add_sleep_data(merged_ppgr_df: pd.DataFrame, raw_sleep_df: pd.DataFrame) -> pd.DataFrame:
-    # Convert columns to datetime    
-    raw_sleep_df['started_at'] = pd.to_datetime(raw_sleep_df['started_at'])
-    raw_sleep_df['ended_at']   = pd.to_datetime(raw_sleep_df['ended_at'])
-
-    # Filter out rows where started_at or ended_at is NaT (or NaN)
-    raw_sleep_df = raw_sleep_df.dropna(subset=['started_at', 'ended_at'])
-
-    # Only focus on users with sleep data
-    users_with_sleep = raw_sleep_df['user_id'].unique()
-    ppgr_subset = merged_ppgr_df[merged_ppgr_df['user_id'].isin(users_with_sleep)].copy()
-
-    # Initialize the 'is_sleeping' column as boolean False
-    merged_ppgr_df["is_sleeping"] = pd.Series(False, index=merged_ppgr_df.index, dtype=bool) 
-    ppgr_subset['is_sleeping'] = pd.Series(False, index=ppgr_subset.index, dtype=bool) 
-
-    # Process each user separately
-    for user_id, user_ppgr in tqdm(ppgr_subset.groupby('user_id'), desc="Adding per-user sleep data"):
+def add_sleep_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds sleep data to the merged PPGR DataFrame by marking whether each CGM 
+    'read_at' timestamp falls within a sleep interval recorded in raw_sleep_df.
+    
+    Parameters
+    ----------
+    merged_ppgr_df : pd.DataFrame
+        The master DataFrame containing CGM data.    
+    Returns
+    -------
+    pd.DataFrame
+        The updated merged_ppgr_df including an 'is_sleeping' column.
+    """
+    log.info("Collecting sleep data from DB...")
+    raw_sleep_df = ds.Data.get_sleep()
+    
+    # Convert sleep timestamps to datetime and filter out invalid rows.
+    raw_sleep_df["started_at"] = pd.to_datetime(raw_sleep_df["started_at"])
+    raw_sleep_df["ended_at"] = pd.to_datetime(raw_sleep_df["ended_at"])
+    raw_sleep_df = raw_sleep_df.dropna(subset=["started_at", "ended_at"])
+    
+    # Only process users with sleep data.
+    users_with_sleep = raw_sleep_df["user_id"].unique()
+    ppgr_subset = merged_ppgr_df[merged_ppgr_df["user_id"].isin(users_with_sleep)].copy()
+    
+    
+    # Initialize the new sleep column in both merged_ppgr_df and ppgr_subset with a default value.
+    merged_ppgr_df["is_sleeping"] = False
+    ppgr_subset["is_sleeping"] = False
+    
+    # Process each user separately.
+    for user_id, user_ppgr in ppgr_subset.groupby("user_id"): #, desc="Adding per-user sleep data":
         # Get and sort sleep intervals for this user.
-        user_sleep = raw_sleep_df[raw_sleep_df['user_id'] == user_id].sort_values('started_at')
+        user_sleep = raw_sleep_df[raw_sleep_df["user_id"] == user_id].sort_values("started_at")
         
-        # Sort the PPGR rows for this user by read_at.
-        user_ppgr_sorted = user_ppgr.sort_values('read_at')
+        # Sort the PPGR rows for this user by 'read_at'.
+        user_ppgr_sorted = user_ppgr.sort_values("read_at")
         
         # Use merge_asof: for each PPGR row, find the most recent sleep interval
-        # whose started_at is not after the read_at.
-        merged = pd.merge_asof(
+        # where 'started_at' is not after the 'read_at' of the PPGR record.
+        merged_user = pd.merge_asof(
             user_ppgr_sorted,
-            user_sleep[['started_at', 'ended_at']].sort_values('started_at'),
-            left_on='read_at',
-            right_on='started_at',
-            direction='backward'
+            user_sleep[["started_at", "ended_at"]].sort_values("started_at"),
+            left_on="read_at",
+            right_on="started_at",
+            direction="backward",
+            tolerance=pd.Timedelta(RESAMPLE_INTERVAL)
         )
         
-        # Compute is_sleeping: mark as sleeping if read_at falls before ended_at.
-        is_sleeping = (merged['read_at'] <= merged['ended_at']).fillna(False).astype(bool)
-        # Use .to_numpy() to ensure we are assigning a proper numpy boolean array
-        ppgr_subset.loc[user_ppgr_sorted.index, 'is_sleeping'] = is_sleeping.to_numpy()        
-
-        log.debug(f"User ID: {user_id}, Percentage Sleeping: {is_sleeping.sum() * 100 / len(is_sleeping):0.2f} %")
+        # Determine if the 'read_at' falls within a sleep interval (i.e., between 'started_at' and 'ended_at').
+        is_sleeping = (
+            (merged_user["read_at"] >= merged_user["started_at"]) & 
+            (merged_user["read_at"] <= merged_user["ended_at"])
+        ).fillna(False).astype(bool)
         
-    # For merging back into merged_ppgr_df, infer objects and cast to bool as well.
-    merged_ppgr_df.loc[ppgr_subset.index, 'is_sleeping'] = ppgr_subset['is_sleeping'].fillna(False).astype(bool)
-
+        # Update the sleep indicator for these rows.
+        ppgr_subset.loc[user_ppgr_sorted.index, "is_sleeping"] = is_sleeping.to_numpy()
+        log.info(f"User ID: {user_id}, Percentage Sleeping: {100 * is_sleeping.mean():0.2f} %")
+    
+    # Merge the sleep data back into the master DataFrame.
+    merged_ppgr_df.loc[ppgr_subset.index, "is_sleeping"] = ppgr_subset["is_sleeping"].fillna(False)
+    
     return merged_ppgr_df
 
 
-# Add a default column for is_sleeping
-merged_ppgr_df = add_sleep_data(merged_ppgr_df, raw_sleep_df)
+if INCLUDE_SLEEP_DATA:
+    merged_ppgr_df = add_sleep_data(merged_ppgr_df)
 
-percentage_sleeping = merged_ppgr_df["is_sleeping"].sum() * 100 / len(merged_ppgr_df)
-log.info(f"Percentage time participants sleeping in the dataset: {percentage_sleeping:0.2f} %")
+    percentage_sleeping = 100 * merged_ppgr_df["is_sleeping"].mean() 
+    log.info(f"Percentage time participants sleeping in the dataset: {percentage_sleeping:0.2f} %")
 
-log.info("Added sleep data to the dataset.")
+    log.info("Added sleep data to the dataset.")
+else:
+    log.warning("Ignoring Sleep Data")
 
+# ---------------------------------------------------------------------------
+# 8. ADD ACTIVITY DATA
+# ---------------------------------------------------------------------------
+
+def add_activity_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds objective activity data to the merged PPGR DataFrame by aligning each
+    record with the most recent activity interval for that user.
+    """
+    from utils import get_activity_name_to_intensity_mappings
+    
+    log.info("Collecting objective physical activity data from DB...")
+    activity_df = (
+        db.AnalyticsDb()
+        .select("""
+            SELECT * FROM pa_activity pa
+            WHERE start_date NOTNULL AND stop_date NOTNULL
+        """)
+        .rename(columns={"user_id_fk": "user_id"})
+    )
+    log.info(f"Collected {len(activity_df)} rows of activity data.")
+
+    # Convert date columns to datetime and drop any rows missing these values
+    activity_df['start_date'] = pd.to_datetime(activity_df['start_date'])
+    activity_df['stop_date'] = pd.to_datetime(activity_df['stop_date'])
+    activity_df = activity_df.dropna(subset=['start_date', 'stop_date'])
+    
+    # Map activity name to intensity
+    # TODO: if the activity mapping changes or is not exhaustive, this will break
+    activity_name_to_intensity = get_activity_name_to_intensity_mappings()
+    
+    activity_df["intensity_inferred"] = activity_df["activity"].apply(lambda x: activity_name_to_intensity[x]) 
+
+    # Only process users with activity data
+    users_with_activity = activity_df['user_id'].unique()
+    ppgr_subset = merged_ppgr_df[merged_ppgr_df['user_id'].isin(users_with_activity)].copy()
+
+    # Define a mapping: original column from the DB -> (new column, default value)
+    activity_mapping = {
+        "activity": ("activity__name", "NA"),
+        "intensity_inferred": ("activity__intensity_inferred", "NA"),
+        "distance": ("activity__distance", 0.0),
+        "altitude_gain": ("activity__altitude_gain", 0.0),
+        "altitude_loss": ("activity__altitude_loss", 0.0),
+        "calories_burned": ("activity__calories_burned", 0.0),
+        "average_hr": ("activity__average_heart_rate", 0.0),
+        "max_hr": ("activity__max_heart_rate", 0.0)
+    }
+
+    # Initialize the new activity columns in merged_ppgr_df + ppgr_subset with their default values.
+    for (_, (new_col, default)) in activity_mapping.items():
+        merged_ppgr_df[new_col] = default 
+        ppgr_subset[new_col] = default
+
+    # Process each user separately.
+    for user_id, user_ppgr in tqdm(ppgr_subset.groupby('user_id'), desc="Adding per-user activity data"):
+        # Get and sort activity intervals for the user.
+        user_activity = activity_df[activity_df['user_id'] == user_id].sort_values('start_date')
+        # Sort the PPGR rows by 'read_at'.
+        user_ppgr_sorted = user_ppgr.sort_values('read_at')
+        
+        for activity_row in user_activity.itertuples():
+            # Find the PPGR rows that fall within the activity interval.
+            within_activity = (user_ppgr_sorted['read_at'] >= activity_row.start_date) & (user_ppgr_sorted['read_at'] <= activity_row.stop_date)
+            # Get the actual indices from the sorted subset.
+            indices = user_ppgr_sorted.index[within_activity]
+            
+            # Assign the activity columns using the mapping.
+            for orig_col, (new_col, default) in activity_mapping.items():
+                try:
+                    ppgr_subset.loc[indices, new_col] = getattr(activity_row, orig_col)
+                except:
+                    import pdb; pdb.set_trace()
+            
+        # Log the percentage of rows with activity data for the user.
+        percent_activity = 100 * (ppgr_subset["activity__name"].fillna("NA") != "NA").mean()
+        log.info(f"User ID: {user_id}, Percentage Activity: {percent_activity:0.2f} %")
+
+    # After processing, update the master DataFrame.
+    for (_, (new_col, default)) in activity_mapping.items():
+        merged_ppgr_df.loc[ppgr_subset.index, new_col] = ppgr_subset[new_col].fillna(default)
+
+    return merged_ppgr_df
+
+if INCLUDE_ACTIVITY_DATA:
+    merged_ppgr_df = add_activity_data(merged_ppgr_df)
+    percent_activity = 100 * (merged_ppgr_df["activity__name"].fillna("NA") != "NA").mean()
+    log.info(f"Percentage of rows with activity data: {percent_activity:0.2f} %")
+else:
+    log.warning("Ignoring Activity Data")
 
 # ---------------------------------------------------------------------------
 # 8. EXPORT FINAL DATASET
