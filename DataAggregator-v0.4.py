@@ -808,8 +808,75 @@ if INCLUDE_ACTIVITY_DATA:
 else:
     log.warning("Ignoring Activity Data")
 
+
 # ---------------------------------------------------------------------------
-# 8. EXPORT FINAL DATASET
+# 11. Add user demographics data
+# ---------------------------------------------------------------------------
+
+def gather_users_demographics_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds user demographics data to the merged PPGR DataFrame by merging with the users table.
+    """
+    log.info("Collecting user demographics data from DB...")
+    users_df = db.FayDb().select("""
+    SELECT * FROM users
+    """)
+    users_questionnaires_df = db.FayDb().select("""
+        SELECT * FROM questionnaires
+    """)
+    users_df = users_df[users_df["id"].isin(merged_ppgr_df.user_id)] # Filter users to only include participants in the merged PPGR DataFrame
+    users_df = users_df[["id", "age", "gender", "weight", "height", "bmi", "microbiome_tube", "wake_up", "go_sleep"]]
+    log.info(f"Collected {len(users_df)} rows of users data.")
+    
+    # recalculate bmi
+    users_df['bmi'] = users_df['weight'] / ((users_df['height'] / 100) ** 2)
+
+    log.info(f'age_unavailable: {users_df["age"].isna().sum()}')
+    log.info(f'gender_unavailable: {users_df["gender"].isna().sum()}')
+    log.info(f'weight_unavailable: {users_df["weight"].isna().sum()}')
+    log.info(f'height_unavailable: {users_df["height"].isna().sum()}')
+    log.info(f'bmi_unavailable: {users_df["bmi"].isna().sum()}')
+    log.info(f'microbiome_tube_unavailable: {users_df["microbiome_tube"].isna().sum()}')
+    log.info(f'wake_up_unavailable: {users_df["wake_up"].isna().sum()}')
+    
+    
+    # Extract the relevant columns from the questionnaires DataFrame.
+    questionnaire_columns = [
+        "user_id", 
+        "edu_degree", 
+        "income", 
+        "household_desc", 
+        "job_status", 
+        "smoking", 
+        "general_hunger_level", 
+        "morning_hunger_level", 
+        "mid_hunger_level", 
+        "evening_hunger_level", 
+        "health_state", 
+        "physical_activities_frequency"
+    ]
+
+    # Create a copy with only the desired columns.
+    questionnaire_df = users_questionnaires_df[questionnaire_columns].copy()
+
+    # Rename all columns (except 'user_id') to be namespaced under "user__"
+    questionnaire_df = questionnaire_df.rename(
+        columns=lambda col: col if col == "user_id" else f"user__{col}"
+    )
+
+    # If your primary user DataFrame uses a different key such as "id", rename it to "user_id" first.
+    users_df = users_df.rename(columns={"id": "user_id"})
+
+    # Now join (merge) both DataFrames on the 'user_id' column.
+    merged_users_df = pd.merge(users_df, questionnaire_df, on="user_id", how="left")
+
+    return merged_users_df
+
+
+users_demographics_df = gather_users_demographics_data(merged_ppgr_df)
+
+# ---------------------------------------------------------------------------
+# 10. EXPORT FINAL DATASET
 # ---------------------------------------------------------------------------
 
 output_merged_path = os.path.join(
@@ -818,6 +885,10 @@ output_merged_path = os.path.join(
 )
 merged_ppgr_df.to_csv(output_merged_path, index=False)
 log.info(f"Final merged dataset saved to: {output_merged_path}")
+
+# Write the users demographics data to a CSV file
+users_demographics_df.to_csv(os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}users-demographics-data-{VERSION}.csv"), index=False)
+log.info(f"Users demographics data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}users-demographics-data-{VERSION}.csv')}")
 
 
 # ---------------------------------------------------------------------------
