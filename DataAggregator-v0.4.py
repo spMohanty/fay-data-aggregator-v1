@@ -818,26 +818,35 @@ def gather_users_demographics_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame
     Adds user demographics data to the merged PPGR DataFrame by merging with the users table.
     """
     log.info("Collecting user demographics data from DB...")
-    users_df = db.FayDb().select("""
+    users_info_raw_df = db.FayDb().select("""
     SELECT * FROM users
     """)
     users_questionnaires_df = db.FayDb().select("""
         SELECT * FROM questionnaires
     """)
-    users_df = users_df[users_df["id"].isin(merged_ppgr_df.user_id)] # Filter users to only include participants in the merged PPGR DataFrame
-    users_df = users_df[["id", "age", "gender", "weight", "height", "bmi", "microbiome_tube", "wake_up", "go_sleep"]]
+    users_df = users_info_raw_df[users_info_raw_df["id"].isin(merged_ppgr_df.user_id)] # Filter users to only include participants in the merged PPGR DataFrame
+    users_df = users_df[["id", "age", "gender", "weight", "height", "bmi", "microbiome_tube", "wake_up", "go_sleep", "birthdate"]] # NOTE: birthdate will be dropped later for privacy reasons
     log.info(f"Collected {len(users_df)} rows of users data.")
     
     # recalculate bmi
     users_df['bmi'] = users_df['weight'] / ((users_df['height'] / 100) ** 2)
+    
+    # Calculate age from birthdate for users who don't have an age (about 17 in the current dataset)
+    ### collect the time range of the current study from the mean year of the user data in merged_ppgr_df
+    study_start_year = merged_ppgr_df["read_at"].dt.year.min()
+    # For users who don't have an age, calculate the age based on the study start year
+    users_df.loc[users_df["age"].isna(), "age"] = (study_start_year - users_df.loc[users_df["age"].isna(), "birthdate"].dt.year)
+    
+    # Drop the birthdate column
+    users_df = users_df.drop(columns=["birthdate"])
 
-    log.info(f'age_unavailable: {users_df["age"].isna().sum()}')
-    log.info(f'gender_unavailable: {users_df["gender"].isna().sum()}')
-    log.info(f'weight_unavailable: {users_df["weight"].isna().sum()}')
-    log.info(f'height_unavailable: {users_df["height"].isna().sum()}')
-    log.info(f'bmi_unavailable: {users_df["bmi"].isna().sum()}')
-    log.info(f'microbiome_tube_unavailable: {users_df["microbiome_tube"].isna().sum()}')
-    log.info(f'wake_up_unavailable: {users_df["wake_up"].isna().sum()}')
+    log.debug(f'age_unavailable: {users_df["age"].isna().sum()}')
+    log.debug(f'gender_unavailable: {users_df["gender"].isna().sum()}')
+    log.debug(f'weight_unavailable: {users_df["weight"].isna().sum()}')
+    log.debug(f'height_unavailable: {users_df["height"].isna().sum()}')
+    log.debug(f'bmi_unavailable: {users_df["bmi"].isna().sum()}')
+    log.debug(f'microbiome_tube_unavailable: {users_df["microbiome_tube"].isna().sum()}')
+    log.debug(f'wake_up_unavailable: {users_df["wake_up"].isna().sum()}')
     
     
     # Extract the relevant columns from the questionnaires DataFrame.
