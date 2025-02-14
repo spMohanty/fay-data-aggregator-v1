@@ -73,6 +73,7 @@ else:
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
 
+
 # ---------------------------------------------------------------------------
 # LOGGING SETUP
 # ---------------------------------------------------------------------------
@@ -300,6 +301,7 @@ def merge_food_cluster(dish_dataframe: pd.DataFrame) -> dict:
         A dictionary with aggregated nutritional information and references 
         to the original rows.
     """
+    
     # Ensure we have only one unique eaten_at timestamp in this cluster
     unique_eaten_at_values = dish_dataframe["eaten_at"].unique()
     assert len(unique_eaten_at_values) == 1, (
@@ -358,7 +360,7 @@ def merge_food_cluster(dish_dataframe: pd.DataFrame) -> dict:
     aggregated_row["food_items"] = " && ".join(
         str(x) for x in dish_dataframe["display_name_en"].tolist()
     )
-
+        
     return aggregated_row
 
 log.info("Aggregating MFR data by dish_id...")
@@ -875,6 +877,11 @@ def gather_users_demographics_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame
 
     # If your primary user DataFrame uses a different key such as "id", rename it to "user_id" first.
     users_df = users_df.rename(columns={"id": "user_id"})
+    
+    # Rename all columns (except 'user_id') to be namespaced under "user__"
+    users_df = users_df.rename(
+        columns=lambda col: col if col == "user_id" else f"user__{col}"
+    )
 
     # Now join (merge) both DataFrames on the 'user_id' column.
     merged_users_df = pd.merge(users_df, questionnaire_df, on="user_id", how="left")
@@ -884,6 +891,65 @@ def gather_users_demographics_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame
 
 users_demographics_df = gather_users_demographics_data(merged_ppgr_df)
 
+
+
+def gather_dishes_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Gathers the data about all the dishes represented in the dataset, and returns a DataFrame.
+    """
+    global filtered_mfr_data
+    
+    # List of all dishes in the dataset
+    all_dishes = merged_ppgr_df["dish_id"].dropna().unique()
+    all_dishes = [str(x).split("||") for x in all_dishes] # some dishes have been merged into a single row, unmerge them
+    # flatten dishes
+    all_dishes = [item for sublist in all_dishes for item in sublist]
+    # convert to int
+    all_dishes = [int(x) for x in all_dishes] # this is needed for the next filtering step
+    
+    # Collect only the subset of the MFR data that is represented in the dataset
+    dishes_df = filtered_mfr_data[filtered_mfr_data["dish_id"].isin(all_dishes)]
+    
+    dish_columns_of_interest = [
+        "food_id",
+        "dish_id",
+        "eaten_quantity_in_gram",
+        "display_name_en",
+        "energy_kcal_eaten",
+        "carb_eaten",
+        "fat_eaten",
+        "protein_eaten",
+        "fiber_eaten",
+        "alcohol_eaten",
+        "sugar_eaten",
+        "dairy_products_meat_fish_eggs_tofu",
+        "vegetables_fruits",
+        "sweets_salty_snacks_alcohol",
+        "non_alcoholic_beverages",
+        "grains_potatoes_pulses",
+        "oils_fats_nuts",
+        "fay_user_id",
+        "cohort",
+        "loc_eaten_hour",
+        "loc_eaten_on",
+        "loc_eaten_dow",
+        "loc_eaten_dow_type",
+        "loc_eaten_season"
+        
+    ]
+    
+    # Drop the Unnamed: 0 column to keep things clean 
+    dishes_df = dishes_df.drop(columns=["Unnamed: 0"])
+    
+    # Rename the columns to be namespaced under "dish__"
+    dishes_df = dishes_df.rename(
+        columns=lambda col: col if col in ["dish_id", "food_id"] else f"food__{col}"
+    )
+
+    return dishes_df.reset_index(drop=True)
+
+
+dishes_df = gather_dishes_data(merged_ppgr_df)
 # ---------------------------------------------------------------------------
 # 10. EXPORT FINAL DATASET
 # ---------------------------------------------------------------------------
@@ -899,6 +965,9 @@ log.info(f"Final merged dataset saved to: {output_merged_path}")
 users_demographics_df.to_csv(os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}users-demographics-data-{VERSION}.csv"), index=False)
 log.info(f"Users demographics data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}users-demographics-data-{VERSION}.csv')}")
 
+# Gather the data about all the dishes represented in the dataset, and save it to a CSV file
+dishes_df.to_csv(os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}dishes-data-{VERSION}.csv"), index=False)
+log.info(f"Dishes data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}dishes-data-{VERSION}.csv')}")
 
 # ---------------------------------------------------------------------------
 # DONE
