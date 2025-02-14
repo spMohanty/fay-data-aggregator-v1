@@ -60,9 +60,12 @@ RESAMPLE_INTERVAL = "15min" # resample CGM data at 15-minute intervals
 GLUCOSE_TIMESERIES_GAP_SPLIT_THRESHOLD = pd.Timedelta(hours=0.5) # break up all timeseries with gaps > 1 hours (else impute)
 FOOD_ALIGNMENT_TIME_WINDOW = pd.Timedelta(hours=0.5)  # Max offset for linking MFR to CGM - at most +/- 30 minutes
 
-
 INCLUDE_SLEEP_DATA = False
 INCLUDE_ACTIVITY_DATA = False
+
+MICROBIOME_DATA_PATH = "data/raw/user_data/user_microbiome.tsv.zip" # Rohan has access to this file
+MICROBIOME_MIN_RELATIVE_ABUNDANCE = 0.0005
+MICROBIOME_MIN_PRESENCE_FRACTION = 0.05
 
 if DEBUG_MODE:
     OUTPUT_DIRECTORY = os.path.join(OUTPUT_DIRECTORY, "debug")
@@ -891,7 +894,9 @@ def gather_users_demographics_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame
 
 users_demographics_df = gather_users_demographics_data(merged_ppgr_df)
 
-
+# ---------------------------------------------------------------------------
+# 10. ADD GRANULAR DISH DATA 
+# ---------------------------------------------------------------------------
 
 def gather_dishes_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -948,8 +953,100 @@ def gather_dishes_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
 
     return dishes_df.reset_index(drop=True)
 
-
 dishes_df = gather_dishes_data(merged_ppgr_df)
+
+# ---------------------------------------------------------------------------
+# 11. Add Microbiome Data 
+# ---------------------------------------------------------------------------
+
+def gather_microbiome_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Gathers the microbiome data for the users in the merged PPGR DataFrame.
+    """
+    from utils import preprocess_microbiome_data_with_RA_and_CLR
+    log.info("Collecting and pre-processing microbiome data")
+    
+    global users_demographics_df # This has the microbiome tube id that we can use to correlate the microbiome data
+    global MICROBIOME_DATA_PATH
+    global MICROBIOME_MIN_RELATIVE_ABUNDANCE
+    global MICROBIOME_MIN_PRESENCE_FRACTION
+    
+    # Load the microbiome data
+    user_microbiome = pd.read_csv(MICROBIOME_DATA_PATH, sep="\t", skiprows=[0])
+
+    
+    # Call the pre-processing function 
+    processed_df = preprocess_microbiome_data_with_RA_and_CLR(
+        user_microbiome,
+            transpose_data=True,
+            min_relative_abundance=MICROBIOME_MIN_RELATIVE_ABUNDANCE,    # OTU must reach 5% RA
+            min_presence_fraction=MICROBIOME_MIN_PRESENCE_FRACTION,     # in at least 5% of samples (adjust to 0.10 if desired)
+            scale_data=True,
+            plot_heatmap=False
+    )
+    
+    # Calculate the mean microbiome data for all the users (to use for users with no microbiome data)
+    mean_microbiome_row = processed_df.mean(axis=0)
+    
+    # Map the processed microbiome data to the users in the merged PPGR DataFrame
+    _users_demographics_df = users_demographics_df.copy()
+    _users_demographics_df["user__microbiome_tube"] = _users_demographics_df["user__microbiome_tube"].astype(int)
+    
+    # Calculate map of sample id to user id
+    sample_id_to_user_id = {}
+    for index, row in _users_demographics_df.iterrows():
+        sample_id_to_user_id[f"sample{row['user__microbiome_tube']}"] = row["user_id"]
+    
+    # identify samples for which we have the data
+    def get_user_from_sample_id(sample_id):
+        _user_df = _users_demographics_df[_users_demographics_df["user__microbiome_tube"] == float(sample_id.replace("sample", ""))]
+        if len(_user_df) == 0:
+            return None
+        else:
+            return _user_df["user_id"].iloc[0]
+
+    # Calculate the corresponding user ids for each sample
+    user_ids = []
+    for sampled_id in processed_df.index.tolist():
+        user_id = get_user_from_sample_id(sampled_id) # this returns None if the sample id is not found in the user demographics df
+        user_ids.append(user_id)
+    
+    # Add the user ids to the processed microbiome data
+    processed_df["user_id"] = processed_df.index.map(get_user_from_sample_id)
+    
+    # Calculate the number of samples for which user was not found
+    num_samples_with_no_user_id = processed_df["user_id"].isna().sum()
+    log.info(f"Found {num_samples_with_no_user_id} samples for which user was not found. Ignoring them.")
+    
+    # drop rows where user_id is None
+    relevant_microbiome_df = processed_df[processed_df["user_id"].notna()].reset_index().set_index("user_id").drop(columns=["index"])
+    relevant_microbiome_df.index = relevant_microbiome_df.index.astype(int)
+    
+    # Check for users with no microbiome data
+    user_ids_not_in_microbiome_df = set(user_ids) - set(relevant_microbiome_df.index.tolist())
+    
+    log.info(f"Found {len(user_ids_not_in_microbiome_df)} users with no microbiome data. Adding the mean microbiome data for these users.")
+    
+    # Reset the index to be able to add the user_id easily for the users with no microbiome data
+    relevant_microbiome_df = relevant_microbiome_df.reset_index()
+    
+    # Add the mean microbiome data for the users with no microbiome data    
+    for user_id in user_ids_not_in_microbiome_df:
+        # Create a temporary DataFrame with the mean row
+        if user_id is not None:
+            mean_microbiome_df = pd.DataFrame([mean_microbiome_row])
+            mean_microbiome_df["user_id"] = user_id
+            # Concatenate with the existing DataFrame
+            relevant_microbiome_df = pd.concat([relevant_microbiome_df, mean_microbiome_df])
+    
+    # Double check that all users have microbiome data
+    assert sorted(relevant_microbiome_df["user_id"].tolist()) == sorted(merged_ppgr_df["user_id"].unique().tolist())
+        
+    return relevant_microbiome_df
+
+
+user_microbiome_df = gather_microbiome_data(merged_ppgr_df)
+
 # ---------------------------------------------------------------------------
 # 10. EXPORT FINAL DATASET
 # ---------------------------------------------------------------------------
@@ -968,6 +1065,10 @@ log.info(f"Users demographics data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{
 # Gather the data about all the dishes represented in the dataset, and save it to a CSV file
 dishes_df.to_csv(os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}dishes-data-{VERSION}.csv"), index=False)
 log.info(f"Dishes data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}dishes-data-{VERSION}.csv')}")
+
+# Gather the microbiome data, and save it to a CSV file
+user_microbiome_df.to_csv(os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}microbiome-data-{VERSION}.csv"), index=False)
+log.info(f"Microbiome data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}microbiome-data-{VERSION}.csv')}")
 
 # ---------------------------------------------------------------------------
 # DONE
