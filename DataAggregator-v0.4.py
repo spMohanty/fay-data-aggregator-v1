@@ -1003,7 +1003,7 @@ def gather_microbiome_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
         if len(_user_df) == 0:
             return None
         else:
-            return _user_df["user_id"].iloc[0]
+            return int(_user_df["user_id"].iloc[0])
 
     # Calculate the corresponding user ids for each sample
     user_ids = []
@@ -1021,14 +1021,15 @@ def gather_microbiome_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
     # drop rows where user_id is None
     relevant_microbiome_df = processed_df[processed_df["user_id"].notna()].reset_index().set_index("user_id").drop(columns=["index"])
     relevant_microbiome_df.index = relevant_microbiome_df.index.astype(int)
-    
+
+    # Reset the index to be able to add the user_id easily for the users with no microbiome data
+    relevant_microbiome_df = relevant_microbiome_df.reset_index()
+        
     # Check for users with no microbiome data
-    user_ids_not_in_microbiome_df = set(user_ids) - set(relevant_microbiome_df.index.tolist())
+    user_ids_not_in_microbiome_df = set(merged_ppgr_df["user_id"].unique().tolist()) - set(relevant_microbiome_df["user_id"].tolist())
     
     log.info(f"Found {len(user_ids_not_in_microbiome_df)} users with no microbiome data. Adding the mean microbiome data for these users.")
     
-    # Reset the index to be able to add the user_id easily for the users with no microbiome data
-    relevant_microbiome_df = relevant_microbiome_df.reset_index()
     
     # Add the mean microbiome data for the users with no microbiome data    
     for user_id in user_ids_not_in_microbiome_df:
@@ -1048,7 +1049,7 @@ def gather_microbiome_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
 user_microbiome_df = gather_microbiome_data(merged_ppgr_df)
 
 # ---------------------------------------------------------------------------
-# 10. EXPORT FINAL DATASET
+# 12. EXPORT FINAL DATASET
 # ---------------------------------------------------------------------------
 
 output_merged_path = os.path.join(
