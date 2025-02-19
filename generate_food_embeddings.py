@@ -27,7 +27,7 @@ tqdm.pandas()
 from openai import OpenAI
 
 # Constants
-OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 DEBUG_MODE = False
 EMBEDDING_VERSION = "v0.1"
 
@@ -47,7 +47,15 @@ logger.info(f"OPENAI_EMBEDDING_MODEL: {OPENAI_EMBEDDING_MODEL}")
 logger.info(f"OUTPUT_PATH: {OUTPUT_PATH}")
 logger.info(f"OUTPUT_PICKLE_PATH: {OUTPUT_PICKLE_PATH}")
 
-
+def get_display_name(row):
+    if pd.notna(row['display_name_en']):
+        return row['display_name_en']
+    elif pd.notna(row['display_name_fr']):
+        return row['display_name_fr']
+    elif pd.notna(row['display_name_de']):
+        return row['display_name_de']
+    else:
+        return None
 
 def calculate_nutritional_components(row):
     """
@@ -67,6 +75,8 @@ def calculate_nutritional_components(row):
         'display_name_en': row['display_name_en'],
         'display_name_fr': row['display_name_fr'],
         'display_name_de': row['display_name_de'],
+        'display_name': get_display_name(row),
+        "food_group_cname": row["food_group_cname"]
     }
     
     if eaten_quantity_in_gram is not None and eaten_quantity_in_gram > 0:
