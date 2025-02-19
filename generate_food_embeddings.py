@@ -27,7 +27,7 @@ tqdm.pandas()
 from openai import OpenAI
 
 # Constants
-OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 DEBUG_MODE = False
 EMBEDDING_VERSION = "v0.1"
 
