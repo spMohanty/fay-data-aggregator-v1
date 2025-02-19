@@ -31,9 +31,21 @@ OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 DEBUG_MODE = False
 EMBEDDING_VERSION = "v0.1"
 
+DEBUG_PREFIX = "-debug" if DEBUG_MODE else ""
+
 MFR_DATA_PATH = "./db_helpers/cache/mfr_data_v1.csv"
-OUTPUT_PATH = f"./data/raw/food_embeddings_{EMBEDDING_VERSION}.csv"
-OUTPUT_PICKLE_PATH = f"./data/raw/food_embeddings_{EMBEDDING_VERSION}.pkl.gz"
+OUTPUT_PATH = f"./data/raw/food_embeddings_{EMBEDDING_VERSION}{DEBUG_PREFIX}.csv"
+OUTPUT_PICKLE_PATH = f"./data/raw/food_embeddings_{EMBEDDING_VERSION}{DEBUG_PREFIX}.pkl.gz"
+
+
+logger.info(f"DEBUG_MODE: {DEBUG_MODE}")
+logger.info(f"DEBUG_PREFIX: {DEBUG_PREFIX}")
+logger.info(f"EMBEDDING_VERSION: {EMBEDDING_VERSION}")
+logger.info(f"MFR_DATA_PATH: {MFR_DATA_PATH}")
+logger.info(f"OPENAI_EMBEDDING_MODEL: {OPENAI_EMBEDDING_MODEL}")
+logger.info(f"OUTPUT_PATH: {OUTPUT_PATH}")
+logger.info(f"OUTPUT_PICKLE_PATH: {OUTPUT_PICKLE_PATH}")
+
 
 
 def calculate_nutritional_components(row):
@@ -189,6 +201,9 @@ def main():
         # Generate embeddings in parallel using the OpenAI API.
         logger.info("Generating OpenAI embeddings in parallel")
         nutritional_components_df['embedding'] = p_map(openai_embed, nutritional_components_df['description'])
+        
+        # Add reference to the embedding model used
+        nutritional_components_df["embedding_mode"] = OPENAI_EMBEDDING_MODEL
         
         # Save the results to a CSV file.
         logger.info(f"Saving food embeddings to {OUTPUT_PICKLE_PATH}")
