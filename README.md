@@ -46,19 +46,73 @@ pip install -r requirements.txt
 Ensure that your db_helpers has all the necessary files as in the structure below:
 ```
 .
-├── cache
-│   └── mfr_data_v0.csv
-│   └── mfr_data_v1.csv
-├── database.py
-├── data_sources.py
-├── db
-│   └── sql
-│       ├── db_table_exists.sql
-│       ├── fanal_glucose_filtered.sql
-│       ├── fanal_participants_tracked.sql
-│       ├── fanal_sleep_all.sql
-│       └── fay_sleep_all.sql
-└── __init__.py
+├── data
+│   ├── processed
+│   │   ├── v0.2 (same as the latest version)
+│   │   ├── v0.3 (same as the latest version)
+│   │   ├── v0.4 (same as the latest version)
+│   │   └── v0.5 
+│   │       ├── debug
+│   │       │   ├── debug-dishes-data-v0.5.csv
+│   │       │   ├── debug-fay-ppgr-processed-and-aggregated-v0.5.csv
+│   │       │   ├── debug-food_aggregated.csv
+│   │       │   ├── debug-food-embeddings-v0.5.csv
+│   │       │   ├── debug-food-embeddings-v0.5.csv.gz
+│   │       │   ├── debug-glucose_raw.csv
+│   │       │   ├── debug-glucose_resampled.csv
+│   │       │   ├── debug-microbiome-data-v0.5.csv
+│   │       │   └── debug-users-demographics-data-v0.5.csv
+│   │       ├── dishes-data-v0.5.csv
+│   │       ├── fay-ppgr-processed-and-aggregated-v0.5.csv
+│   │       ├── food_aggregated.csv
+│   │       ├── food-embeddings-v0.5.csv.gz
+│   │       ├── glucose_raw.csv
+│   │       ├── glucose_resampled.csv
+│   │       ├── microbiome-data-v0.5.csv
+│   │       └── users-demographics-data-v0.5.csv
+│   └── raw
+│       ├── food_embeddings_v0.1-debug.pkl.gz
+│       ├── food_embeddings_v0.1.pkl.gz
+│       └── user_data
+│           ├── CHANGELOG.txt
+│           ├── microbiome_metadata.csv
+│           └── user_microbiome.tsv.zip
+├── DataAggregator-v0.4.py
+├── db_helpers
+│   ├── cache
+│   │   ├── CHANGELOG.txt
+│   │   ├── mfr_data_v0.csv
+│   │   └── mfr_data_v1.csv
+│   ├── database.py
+│   ├── data_sources.py
+│   ├── db
+│   │   └── sql
+│   │       ├── db_table_exists.sql
+│   │       ├── fanal_glucose_filtered.sql
+│   │       ├── fanal_participants_tracked.sql
+│   │       ├── fanal_sleep_all.sql
+│   │       └── fay_sleep_all.sql
+│   ├── __init__.py
+│   └── __pycache__
+│       ├── database.cpython-311.pyc
+│       ├── data_sources.cpython-311.pyc
+│       └── __init__.cpython-311.pyc
+├── generate_food_embeddings.py
+├── notebooks
+│   ├── data
+│   │   └── processed
+│   │       └── v0.4
+│   │           └── debug
+│   │               ├── debug-food_aggregated.csv
+│   │               ├── debug-glucose_raw.csv
+│   │               └── debug-glucose_resampled.csv
+│   └── DataAggregator-v0.2.ipynb
+├── README.md
+├── requirements.txt
+├── utils.py
+└── versions
+    ├── DataAggregator-v0.2.py
+    └── DataAggregator-v0.3.py
 ```
 You might need to talk to someone at DE lab to get access to the `mfr_data.csv` file.
 

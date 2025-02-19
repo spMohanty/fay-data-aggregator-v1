@@ -68,7 +68,7 @@ MICROBIOME_MIN_RELATIVE_ABUNDANCE = 0.0005
 MICROBIOME_MIN_PRESENCE_FRACTION = 0.05
 
 
-FOOD_EMBEDDINGS_PATH = "data/raw/food_embeddings_v0.1.csv"
+FOOD_EMBEDDINGS_PATH = "data/raw/food_embeddings_v0.1.pkl.gz"
 
 if DEBUG_MODE:
     OUTPUT_DIRECTORY = os.path.join(OUTPUT_DIRECTORY, "debug")
@@ -1065,12 +1065,22 @@ def gather_food_embeddings(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
     
     # Load the food embeddings
     log.info(f"Loading food embeddings from {FOOD_EMBEDDINGS_PATH}")
-    food_embeddings_df = pd.read_csv(FOOD_EMBEDDINGS_PATH)
+    food_embeddings_df = pd.read_pickle(FOOD_EMBEDDINGS_PATH)
 
+
+    # Check that all food_ids in dishes_df are present in food_embeddings_df
+    missing_food_ids = set(dishes_df["food_id"]) - set(food_embeddings_df["food_id"])
+    if missing_food_ids:
+        raise ValueError(f"The following food_ids are missing from the food embeddings data: {missing_food_ids}. Cannot proceed.")
+    else:
+        log.info(f"All food_ids in dishes_df are present in food_embeddings_df")
 
     log.info(f"Filtering food embeddings to only include the food items in the dishes data")
     food_embeddings_df = food_embeddings_df[food_embeddings_df["food_id"].isin(dishes_df["food_id"])]
     
+    # Set the food_id as the index and sort the index
+    food_embeddings_df.set_index("food_id", inplace=True)
+    food_embeddings_df.sort_index(inplace=True)
     return food_embeddings_df
 
 
@@ -1100,12 +1110,14 @@ user_microbiome_df.to_csv(os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}micr
 log.info(f"Microbiome data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}microbiome-data-{VERSION}.csv')}")
 
 # Gather the food embeddings, and save it to a CSV file
-food_embeddings_df.to_csv(
-    os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}food-embeddings-{VERSION}.csv.gz"),
-    index=False,
+food_embeddings_pickle_path = os.path.join(
+    OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}food-embeddings-{VERSION}.pkl.gz"
+)
+food_embeddings_df.to_pickle(
+    food_embeddings_pickle_path,
     compression='gzip'
 )
-log.info(f"Food embeddings saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}food-embeddings-{VERSION}.csv.gz')}")
+log.info(f"Food embeddings saved to: {food_embeddings_pickle_path}")
 
 # ---------------------------------------------------------------------------
 # DONE
