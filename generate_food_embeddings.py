@@ -27,12 +27,13 @@ tqdm.pandas()
 from openai import OpenAI
 
 # Constants
-OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 DEBUG_MODE = False
 EMBEDDING_VERSION = "v0.1"
 
 MFR_DATA_PATH = "./db_helpers/cache/mfr_data_v1.csv"
 OUTPUT_PATH = f"./data/raw/food_embeddings_{EMBEDDING_VERSION}.csv"
+OUTPUT_PICKLE_PATH = f"./data/raw/food_embeddings_{EMBEDDING_VERSION}.pkl.gz"
 
 
 def calculate_nutritional_components(row):
@@ -124,7 +125,7 @@ def openai_embed(text):
             input=text
         )
         # Return only the embedding list which is picklable.
-        return response.data[0].embedding
+        return torch.tensor(response.data[0].embedding, dtype=torch.float32)
     except Exception as e:
         logger.error(f"Error generating embeddings for text (first 50 chars): {text[:50]}... Error: {e}")
         return f"Error: {str(e)}"  # Alternatively, a placeholder like [0.0] * embedding_dim may be used.
@@ -190,9 +191,9 @@ def main():
         nutritional_components_df['embedding'] = p_map(openai_embed, nutritional_components_df['description'])
         
         # Save the results to a CSV file.
-        logger.info(f"Saving food embeddings to {OUTPUT_PATH}")
-        nutritional_components_df.to_csv(OUTPUT_PATH, index=False)
-        logger.success(f"Successfully saved food embeddings to {OUTPUT_PATH}")
+        logger.info(f"Saving food embeddings to {OUTPUT_PICKLE_PATH}")
+        nutritional_components_df.to_pickle(OUTPUT_PICKLE_PATH, compression="gzip")
+        logger.success(f"Successfully saved food embeddings to {OUTPUT_PICKLE_PATH}")
         
     except Exception as e:
         logger.error(f"Error in main: {e}")

@@ -180,3 +180,8 @@ data/
 
 debug.ipynb
 Debug.ipynb
+
+
+generate_food_embeddings.sh
+
+logs/
