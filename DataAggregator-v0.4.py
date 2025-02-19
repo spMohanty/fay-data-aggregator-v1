@@ -48,7 +48,7 @@ pd.set_option('future.no_silent_downcasting', True)
 
 load_dotenv()
 
-VERSION = "v0.4"
+VERSION = "v0.5"
 
 DEBUG_MODE = os.getenv("DEBUG_MODE", "True").lower() == "true"
 NUM_PARTICIPANTS_IN_DEBUG_MODE = 5
@@ -66,6 +66,9 @@ INCLUDE_ACTIVITY_DATA = False
 MICROBIOME_DATA_PATH = "data/raw/user_data/user_microbiome.tsv.zip" # Rohan has access to this file
 MICROBIOME_MIN_RELATIVE_ABUNDANCE = 0.0005
 MICROBIOME_MIN_PRESENCE_FRACTION = 0.05
+
+
+FOOD_EMBEDDINGS_PATH = "data/raw/food_embeddings_v0.1.csv"
 
 if DEBUG_MODE:
     OUTPUT_DIRECTORY = os.path.join(OUTPUT_DIRECTORY, "debug")
@@ -1048,6 +1051,31 @@ def gather_microbiome_data(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
 
 user_microbiome_df = gather_microbiome_data(merged_ppgr_df)
 
+# --------------------------------------------------------------------------- 
+# 12. Add Food Embeddings
+# ---------------------------------------------------------------------------
+
+
+def gather_food_embeddings(merged_ppgr_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Gathers the food embeddings for the dishes in the merged PPGR DataFrame.
+    """
+    global dishes_df
+    log.info("Collecting food embeddings for the food items in the dishes data")
+    
+    # Load the food embeddings
+    log.info(f"Loading food embeddings from {FOOD_EMBEDDINGS_PATH}")
+    food_embeddings_df = pd.read_csv(FOOD_EMBEDDINGS_PATH)
+
+
+    log.info(f"Filtering food embeddings to only include the food items in the dishes data")
+    food_embeddings_df = food_embeddings_df[food_embeddings_df["food_id"].isin(dishes_df["food_id"])]
+    
+    return food_embeddings_df
+
+
+food_embeddings_df = gather_food_embeddings(merged_ppgr_df)
+
 # ---------------------------------------------------------------------------
 # 12. EXPORT FINAL DATASET
 # ---------------------------------------------------------------------------
@@ -1070,6 +1098,14 @@ log.info(f"Dishes data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PRE
 # Gather the microbiome data, and save it to a CSV file
 user_microbiome_df.to_csv(os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}microbiome-data-{VERSION}.csv"), index=False)
 log.info(f"Microbiome data saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}microbiome-data-{VERSION}.csv')}")
+
+# Gather the food embeddings, and save it to a CSV file
+food_embeddings_df.to_csv(
+    os.path.join(OUTPUT_DIRECTORY, f"{FILENAME_PREFIX}food-embeddings-{VERSION}.csv.gz"),
+    index=False,
+    compression='gzip'
+)
+log.info(f"Food embeddings saved to: {os.path.join(OUTPUT_DIRECTORY, f'{FILENAME_PREFIX}food-embeddings-{VERSION}.csv.gz')}")
 
 # ---------------------------------------------------------------------------
 # DONE

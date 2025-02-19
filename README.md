@@ -79,12 +79,11 @@ The pipeline generates several CSV files in the configured output directory:
 3. `fay-ppgr-processed-and-aggregated-{VERSION}.csv` - Final merged dataset
 4. `fay-ppgr-processed-and-aggregated-{VERSION}-dev.csv` - Development subset
 
-## Security Notes
+## Food Embeddings
 
-- Never commit the `.env` file containing credentials to version control
-- Use environment variables for all sensitive configuration
-- Ensure database access is read-only where possible
-- Follow security best practices when handling participant data
+We use OpenAI's API to generate embeddings for the food items. The embeddings are saved in the `data/raw/food_embeddings_{VERSION}.csv` file.
+The versions are as follows: 
+- `v0.1` - All unique food_ids in `./db_helpers/cache/mfr_data_v1.csv` using OpenAI `text-embedding-3-small`
 
 ## Author
 
