@@ -137,7 +137,7 @@ The pipeline generates several CSV files in the configured output directory:
 
 We use OpenAI's API to generate embeddings for the food items. The embeddings are saved in the `data/raw/food_embeddings_{VERSION}.csv` file.
 The versions are as follows: 
-- `v0.1` - All unique food_ids in `./db_helpers/cache/mfr_data_v1.csv` using OpenAI `text-embedding-3-small`
+- `v0.1` - All unique food_ids in `./db_helpers/cache/mfr_data_v1.csv` using OpenAI `text-embedding-3-large`
 
 ## Author
 

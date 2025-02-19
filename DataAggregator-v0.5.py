@@ -39,6 +39,8 @@ from tqdm import TqdmExperimentalWarning
 
 import logging
 from rich.logging import RichHandler
+from rich.console import Console
+from rich.table import Table
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 pd.set_option('future.no_silent_downcasting', True)
@@ -93,6 +95,43 @@ logging.basicConfig(
 
 log = logging.getLogger("rich")
 log.warning(f"Debug mode: {DEBUG_MODE}")
+
+def print_global_config():
+    """
+    Prints a table of all global configuration variables.
+    """
+    config = {
+        "VERSION": VERSION,
+        "DEBUG_MODE": DEBUG_MODE,
+        "NUM_PARTICIPANTS_IN_DEBUG_MODE": NUM_PARTICIPANTS_IN_DEBUG_MODE,
+        "OUTPUT_DIRECTORY": OUTPUT_DIRECTORY,
+        "FILENAME_PREFIX": FILENAME_PREFIX,
+        "RESAMPLE_INTERVAL": RESAMPLE_INTERVAL,
+        "GLUCOSE_TIMESERIES_GAP_SPLIT_THRESHOLD": str(GLUCOSE_TIMESERIES_GAP_SPLIT_THRESHOLD),
+        "FOOD_ALIGNMENT_TIME_WINDOW": str(FOOD_ALIGNMENT_TIME_WINDOW),
+        "INCLUDE_SLEEP_DATA": INCLUDE_SLEEP_DATA,
+        "INCLUDE_ACTIVITY_DATA": INCLUDE_ACTIVITY_DATA,
+        "MICROBIOME_DATA_PATH": MICROBIOME_DATA_PATH,
+        "MICROBIOME_MIN_RELATIVE_ABUNDANCE": MICROBIOME_MIN_RELATIVE_ABUNDANCE,
+        "MICROBIOME_MIN_PRESENCE_FRACTION": MICROBIOME_MIN_PRESENCE_FRACTION,
+        "FOOD_EMBEDDINGS_PATH": FOOD_EMBEDDINGS_PATH
+    }
+    
+    table = Table(title="Global Configuration")
+    table.add_column("Variable", style="cyan", no_wrap=True)
+    table.add_column("Value", style="magenta")
+    
+    for key, value in config.items():
+        table.add_row(key, str(value))
+    
+    console = Console()
+    console.print(table)
+
+# Call the print function after logging is setup.
+print_global_config()
+
+
+
 
 # ---------------------------------------------------------------------------
 # 1. LOAD DATA DIRECTLY FROM DATABASE
