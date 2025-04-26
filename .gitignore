@@ -185,3 +185,6 @@ Debug.ipynb
 generate_food_embeddings.sh
 
 logs/
+
+
+run_slurm.sh
