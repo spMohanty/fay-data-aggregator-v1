@@ -12,8 +12,6 @@ Single-run script for:
    nearest CGM timestamp within a chosen time window.
 5. Exporting the final merged dataset to CSV.
 
-Author: [Your Name]
-Date: [Date]
 """
 
 import os
